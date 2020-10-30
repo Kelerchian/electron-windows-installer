@@ -74,6 +74,12 @@ export interface Options {
    */
   certificatePassword?: string;
   /**
+   * Params to override signtool as code signing tool
+   *
+   * allowed values: "signtool" | "osslsigncode"
+   */
+  signTool?: "signtool" | "osslsigncode";
+  /**
    * Params to pass to signtool.
    *
    * Overrides `certificateFile` and `certificatePassword`.

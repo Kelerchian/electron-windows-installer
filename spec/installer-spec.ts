@@ -9,7 +9,7 @@ const log = require('debug')('electron-windows-installer:spec');
 const appDirectory = path.join(__dirname, 'fixtures/app');
 
 test.beforeEach(async (): Promise<void> => {
-  const updateExePath = path.join(appDirectory, 'Squirrel.exe');
+  const updateExePath = path.join(appDirectory, 'Update.exe');
 
   if (await fs.pathExists(updateExePath)) {
     await fs.unlink(updateExePath);
@@ -37,5 +37,5 @@ test('creates a nuget package and installer', async (t): Promise<void> => {
   }
 
   log('Verifying Update.exe');
-  t.true(await fs.pathExists(path.join(appDirectory, 'Squirrel.exe')));
+  t.true(await fs.pathExists(path.join(appDirectory, 'Update.exe')));
 });
