@@ -1,212 +1,264 @@
-import * as asar from 'asar';
-import { createTempDir } from './temp-utils';
-import * as fs from 'fs-extra';
-import { Metadata, Options, PersonMetadata } from './options';
-import * as path from 'path';
-import spawn from './spawn-promise';
-import template from 'lodash.template';
+import * as asar from "asar";
+import { createTempDir } from "./temp-utils";
+import * as fs from "fs-extra";
+import { Metadata, Options, PersonMetadata } from "./options";
+import * as path from "path";
+import template from "lodash.template";
+import {
+  useRCEdit,
+  useNuget,
+  useSyncReleases,
+  useSquirrelCLI,
+  getSquirrelWin32CLIPath,
+} from "./vendor-bindings";
 
-export { Options } from './options';
+export { Options } from "./options";
+const log = require("debug")("electron-windows-installer:main");
 
-const log = require('debug')('electron-windows-installer:main');
+const DEFAULT_LOADING_GIF = path.join(
+  __dirname,
+  "..",
+  "resources",
+  "install-spinner.gif"
+);
 
 export function convertVersion(version: string): string {
-  const parts = version.split('-');
+  const parts = version.split("-");
   const mainVersion = parts.shift();
 
   if (parts.length > 0) {
-    return [mainVersion, parts.join('-').replace(/\./g, '')].join('-');
+    return [mainVersion, parts.join("-").replace(/\./g, "")].join("-");
   } else {
     return mainVersion as string;
   }
 }
 
-
 export async function createWindowsInstaller(options: Options): Promise<void> {
-  let useMono = false;
-
-  const monoExe = 'mono';
-  const wineExe = process.arch === 'x64' ? 'wine64' : 'wine';
-
-  if (process.platform !== 'win32') {
-    useMono = true;
-    if (!wineExe || !monoExe) {
-      throw new Error('You must install both Mono and Wine on non-Windows');
-    }
-
-    log(`Using Mono: '${monoExe}'`);
-    log(`Using Wine: '${wineExe}'`);
-  }
-
   let { appDirectory, outputDirectory, loadingGif } = options;
-  outputDirectory = path.resolve(outputDirectory || 'installer');
+  outputDirectory = path.resolve(outputDirectory || "installer");
 
-  const vendorPath = path.join(__dirname, '..', 'vendor');
-  const vendorUpdate = path.join(vendorPath, 'Squirrel.exe');
-  const appUpdate = path.join(appDirectory, 'Squirrel.exe');
+  const appSquirrelExePath = path.join(appDirectory, "Squirrel.exe");
 
-  await fs.copy(vendorUpdate, appUpdate);
-  if (options.setupIcon && (options.skipUpdateIcon !== true)) {
-    let cmd = path.join(vendorPath, 'rcedit.exe');
-    let args = [
-      appUpdate,
-      '--set-icon', options.setupIcon
-    ];
-
-    if (useMono) {
-      args.unshift(cmd);
-      cmd = wineExe;
-    }
-
-    await spawn(cmd, args);
+  await fs.copy(getSquirrelWin32CLIPath(), appSquirrelExePath);
+  if (options.setupIcon && options.skipUpdateIcon !== true) {
+    await useRCEdit([appSquirrelExePath, "--set-icon", options.setupIcon]);
   }
 
-  const defaultLoadingGif = path.join(__dirname, '..', 'resources', 'install-spinner.gif');
-  loadingGif = loadingGif ? path.resolve(loadingGif) : defaultLoadingGif;
+  loadingGif = loadingGif ? path.resolve(loadingGif) : DEFAULT_LOADING_GIF;
 
-  let { certificateFile, certificatePassword, remoteReleases, signWithParams, remoteToken } = options;
+  let {
+    certificateFile,
+    certificatePassword,
+    remoteReleases,
+    signWithParams,
+    signTool,
+    remoteToken,
+  } = options;
 
   const metadata: Metadata = {
-    description: '',
-    iconUrl: 'https://raw.githubusercontent.com/electron/electron/master/shell/browser/resources/win/electron.ico'
+    description: "",
+    iconUrl:
+      "https://raw.githubusercontent.com/electron/electron/master/shell/browser/resources/win/electron.ico",
   };
 
   if (options.usePackageJson !== false) {
-    const appResources = path.join(appDirectory, 'resources');
-    const asarFile = path.join(appResources, 'app.asar');
+    const appResources = path.join(appDirectory, "resources");
+    const asarFile = path.join(appResources, "app.asar");
     let appMetadata;
 
     if (await fs.pathExists(asarFile)) {
-      appMetadata = JSON.parse(asar.extractFile(asarFile, 'package.json'));
+      appMetadata = JSON.parse(asar.extractFile(asarFile, "package.json"));
     } else {
-      appMetadata = await fs.readJson(path.join(appResources, 'app', 'package.json'));
+      appMetadata = await fs.readJson(
+        path.join(appResources, "app", "package.json")
+      );
     }
 
-    Object.assign(metadata, {
-      exe: `${appMetadata.name}.exe`,
-      title: appMetadata.productName || appMetadata.name
-    }, appMetadata);
+    Object.assign(
+      metadata,
+      {
+        exe: `${appMetadata.name}.exe`,
+        title: appMetadata.productName || appMetadata.name,
+      },
+      appMetadata
+    );
   }
 
   Object.assign(metadata, options);
 
   if (!metadata.authors) {
-    if (typeof (metadata.author) === 'string') {
+    if (typeof metadata.author === "string") {
       metadata.authors = metadata.author;
     } else {
       // eslint-disable-next-line @typescript-eslint/no-object-literal-type-assertion
-      metadata.authors = (metadata.author || ({} as PersonMetadata)).name || '';
+      metadata.authors = (metadata.author || ({} as PersonMetadata)).name || "";
     }
   }
 
   metadata.owners = metadata.owners || metadata.authors;
   metadata.version = convertVersion(metadata.version as string);
-  metadata.copyright = metadata.copyright ||
-    `Copyright © ${new Date().getFullYear()} ${metadata.authors || metadata.owners}`;
+  metadata.copyright =
+    metadata.copyright ||
+    `Copyright © ${new Date().getFullYear()} ${
+      metadata.authors || metadata.owners
+    }`;
 
-  let templateData = await fs.readFile(path.join(__dirname, '..', 'template.nuspectemplate'), 'utf8');
-  if (path.sep === '/') {
-    templateData = templateData.replace(/\\/g, '/');
+  let templateData = await fs.readFile(
+    path.join(__dirname, "..", "template.nuspectemplate"),
+    "utf8"
+  );
+  if (path.sep === "/") {
+    templateData = templateData.replace(/\\/g, "/");
   }
   const nuspecContent = template(templateData)(metadata);
 
   log(`Created NuSpec file:\n${nuspecContent}`);
 
-  const nugetOutput = await createTempDir('si-');
-  const targetNuspecPath = path.join(nugetOutput, metadata.name + '.nuspec');
+  const nugetOutput = await createTempDir("si-");
+  const targetNuspecPath = path.join(nugetOutput, metadata.name + ".nuspec");
 
   await fs.writeFile(targetNuspecPath, nuspecContent);
 
-  let cmd = path.join(vendorPath, 'nuget.exe');
-  let args = [
-    'pack', targetNuspecPath,
-    '-BasePath', appDirectory,
-    '-OutputDirectory', nugetOutput,
-    '-NoDefaultExcludes'
-  ];
-
-  if (useMono) {
-    args.unshift(cmd);
-    cmd = monoExe;
-  }
-
   // Call NuGet to create our package
-  log(await spawn(cmd, args));
-  const nupkgPath = path.join(nugetOutput, `${metadata.name}.${metadata.version}.nupkg`);
+  log(
+    await useNuget([
+      "pack",
+      targetNuspecPath,
+      "-BasePath",
+      appDirectory,
+      "-OutputDirectory",
+      nugetOutput,
+      "-NoDefaultExcludes",
+    ])
+  );
 
   if (remoteReleases) {
-    cmd = path.join(vendorPath, 'SyncReleases.exe');
-    args = ['-u', remoteReleases, '-r', outputDirectory];
-
-    if (useMono) {
-      args.unshift(cmd);
-      cmd = monoExe;
-    }
-
-    if (remoteToken) {
-      args.push('-t', remoteToken);
-    }
-
-    log(await spawn(cmd, args));
+    log(
+      await useSyncReleases(
+        (() => {
+          switch (true) {
+            case !!remoteToken:
+              return [
+                "-u",
+                remoteReleases,
+                "-r",
+                outputDirectory,
+                "-t",
+                remoteToken as string,
+              ];
+            default:
+              return ["-u", remoteReleases, "-r", outputDirectory];
+          }
+        })()
+      )
+    );
   }
 
-  cmd = path.join(vendorPath, 'Squirrel.exe');
-  args = [
-    '--releasify', nupkgPath,
-    '--releaseDir', outputDirectory,
-    '--loadingGif', loadingGif
+  const nupkgPath = path.join(
+    nugetOutput,
+    `${metadata.name}.${metadata.version}.nupkg`
+  );
+
+  const releaseArgs = [
+    "--releasify",
+    nupkgPath,
+    "--releaseDir",
+    outputDirectory,
+    "--loadingGif",
+    loadingGif,
   ];
 
-  if (useMono) {
-    args.unshift(path.join(vendorPath, 'Squirrel-Mono.exe'));
-    cmd = monoExe;
-  }
+  (() => {
+    switch (signTool) {
+      case "osslsigncode": {
+        if (signWithParams) {
+          return releaseArgs.push("--signWithParams", signWithParams);
+        }
 
-  if (signWithParams) {
-    args.push('--signWithParams');
-    if (!signWithParams.includes('/f') && !signWithParams.includes('/p') && certificateFile && certificatePassword) {
-      args.push(`${signWithParams} /a /f "${path.resolve(certificateFile)}" /p "${certificatePassword}"`);
-    } else {
-      args.push(signWithParams);
+        if (certificateFile && certificatePassword) {
+          return releaseArgs.push(
+            "--signWithParams",
+            `-pkcs12 "${path.resolve(
+              certificateFile
+            )}" -pass "${certificatePassword}"`
+          );
+        }
+        break;
+      }
+      default: {
+        if (
+          signWithParams &&
+          signWithParams.includes("/f") &&
+          signWithParams.includes("/p")
+        ) {
+          return releaseArgs.push("--signWithParams", signWithParams);
+        }
+
+        if (signWithParams && certificateFile && certificatePassword) {
+          return releaseArgs.push(
+            "--signWithParams",
+            `${signWithParams} /a /f "${path.resolve(
+              certificateFile
+            )}" /p "${certificatePassword}"`
+          );
+        }
+
+        if (certificateFile && certificatePassword) {
+          return releaseArgs.push(
+            "--signWithParams",
+            `/a /f "${path.resolve(
+              certificateFile
+            )}" /p "${certificatePassword}"`
+          );
+        }
+        break;
+      }
     }
-  } else if (certificateFile && certificatePassword) {
-    args.push('--signWithParams');
-    args.push(`/a /f "${path.resolve(certificateFile)}" /p "${certificatePassword}"`);
+  })();
+
+  if (signTool) {
+    releaseArgs.push("--signTool", signTool);
   }
 
   if (options.setupIcon) {
-    args.push('--setupIcon');
-    args.push(path.resolve(options.setupIcon));
+    releaseArgs.push("--setupIcon");
+    releaseArgs.push(path.resolve(options.setupIcon));
   }
 
   if (options.noMsi) {
-    args.push('--no-msi');
+    releaseArgs.push("--no-msi");
   }
 
   if (options.noDelta) {
-    args.push('--no-delta');
+    releaseArgs.push("--no-delta");
   }
 
   if (options.frameworkVersion) {
-    args.push('--framework-version');
-    args.push(options.frameworkVersion);
+    releaseArgs.push("--framework-version");
+    releaseArgs.push(options.frameworkVersion);
   }
 
-  log(await spawn(cmd, args));
+  log(await useSquirrelCLI(releaseArgs));
 
   if (options.fixUpPaths !== false) {
-    log('Fixing up paths');
+    log("Fixing up paths");
 
     if (metadata.productName || options.setupExe) {
-      const setupPath = path.join(outputDirectory, options.setupExe || `${metadata.productName}Setup.exe`);
-      const unfixedSetupPath = path.join(outputDirectory, 'Setup.exe');
+      const setupPath = path.join(
+        outputDirectory,
+        options.setupExe || `${metadata.productName}Setup.exe`
+      );
+      const unfixedSetupPath = path.join(outputDirectory, "Setup.exe");
       log(`Renaming ${unfixedSetupPath} => ${setupPath}`);
       await fs.rename(unfixedSetupPath, setupPath);
     }
 
     if (metadata.productName || options.setupMsi) {
-      const msiPath = path.join(outputDirectory, options.setupMsi || `${metadata.productName}Setup.msi`);
-      const unfixedMsiPath = path.join(outputDirectory, 'Setup.msi');
+      const msiPath = path.join(
+        outputDirectory,
+        options.setupMsi || `${metadata.productName}Setup.msi`
+      );
+      const unfixedMsiPath = path.join(outputDirectory, "Setup.msi");
       if (await fs.pathExists(unfixedMsiPath)) {
         log(`Renaming ${unfixedMsiPath} => ${msiPath}`);
         await fs.rename(unfixedMsiPath, msiPath);
