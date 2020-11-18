@@ -1,3 +1,7 @@
+# FORK INFO
+
+Vendor folder in this repo uses binaries built from https://github.com/AccelByte/Squirrel.Windows/tree/b20-packager-1-9-1
+
 # Electron Installer
 
 [![AppVeyor Build status](https://ci.appveyor.com/api/projects/status/bq6c06suq5abb66s/branch/master?svg=true)](https://ci.appveyor.com/project/electron-bot/windows-installer/branch/master)
